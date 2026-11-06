@@ -74,11 +74,34 @@ class CLSC_Model(mesa.Model):
                 reporters[f"Flow|{p_id}|RDC|{c_name}"] = lambda m, c=ct, pid=p_id: m.daily_log['movements']['pro_to_rdc'][pid][c]
                 reporters[f"Backorders|{p_id}|{c_name}"] = lambda m, c=ct, pid=p_id: sum(o.quantity for o in m.producers_by_id[pid].order_book if o.crate_type == c and m.steps >= (o.creation_step + o.lead_time))
 
+        # Pooler screening counters. All quantities except rates are in ULs.
+        reporters.update({
+            'Screening|arrived_uls': lambda m: m.daily_log['screening']['arrived_uls'],
+            'Screening|screened_uls': lambda m: m.daily_log['screening']['screened_uls'],
+            'Screening|bypassed_uls': lambda m: m.daily_log['screening']['bypassed_uls'],
+            'Screening|processed_uls': lambda m: m.daily_log['screening']['processed_uls'],
+            'Screening|capacity_uls': lambda m: m.config.POOL_SCREENING_CAPACITY,
+            'Screening|utilization_pct': lambda m: (
+                100.0 * m.daily_log['screening']['screened_uls'] / m.config.POOL_SCREENING_CAPACITY
+                if m.config.POOL_SCREENING_CAPACITY > 0 else None
+            ),
+            'Screening|bypass_rate_pct': lambda m: (
+                100.0 * m.daily_log['screening']['bypassed_uls'] / m.daily_log['screening']['arrived_uls']
+                if m.daily_log['screening']['arrived_uls'] > 0 else None
+            ),
+        })
+
         self.datacollector = mesa.DataCollector(model_reporters=reporters)
         self.datacollector.collect(self)
 
     def reset_daily_log(self):
         self.daily_log = {
+            'screening': {
+                'arrived_uls': 0,
+                'screened_uls': 0,
+                'bypassed_uls': 0,
+                'processed_uls': 0,
+            },
             'movements': {
                 'pro_to_rdc': {p.producer_id: {ct: 0 for ct in CrateType} for p in self.producers},
                 'pool_to_pro': {p.producer_id: {ct: 0 for ct in CrateType} for p in self.producers},
@@ -110,6 +133,12 @@ class CLSC_Model(mesa.Model):
             
             if self.all_orders:
                 pd.DataFrame(self.all_orders).sort_values(by=['Step', 'Issuer']).to_excel(writer, sheet_name='Orders', index=False)
+
+            screening_cols = [c for c in df_wide.columns if c.startswith('Screening|')]
+            if screening_cols:
+                screening_df = df_wide[['Step', *screening_cols]].copy()
+                screening_df.columns = ['Step'] + [c.split('|', 1)[1] for c in screening_cols]
+                screening_df.to_excel(writer, sheet_name='Screening', index=False)
                 
         print(f"\nSimulation log exported successfully: {filename}")
     
