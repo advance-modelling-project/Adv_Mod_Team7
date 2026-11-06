@@ -1,0 +1,2 @@
+workbook,completed_days,initial_rtis_reported,default_initial_rtis_expected,initial_stock_matches_default,end_of_day_stock_conserved,pro_to_rdc_equals_rdc_to_rpos_each_day,total_demand_ordered_rtis,total_pro_to_rdc_rtis,total_rdc_to_pool_rtis,mean_producer_backorders_rtis,mean_pool_backorders_rtis,peak_total_backorders_rtis,mean_pool_washed_stock_rtis,mean_pool_unwashed_stock_rtis
+run_2026.11.06_13.42\sim_log_2026.11.06_13.42.xlsx,365,322800,322800,True,True,True,2556724,2543074,2554200,0.0,0.0,0,118776.44,65203.29
