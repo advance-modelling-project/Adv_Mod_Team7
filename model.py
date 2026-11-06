@@ -2,6 +2,7 @@ import os
 import mesa
 import pandas as pd
 from datetime import datetime
+from fulfillment_metrics import OrderTracker
 from config import SimulationConfig, CrateType, Product
 from agents import Pooler_Agent, Producer_Agent, RDC_Agent, RPOS_Agent, RTI_Agent
 
@@ -15,6 +16,8 @@ class CLSC_Model(mesa.Model):
         self.timestamp = run_timestamp if run_timestamp else datetime.now().strftime("%Y.%m.%d_%H.%M")
         self.results_dir = results_dir if results_dir else f"run_{self.timestamp}"
         self.all_orders = []
+        self.order_tracker = OrderTracker(self.config.UL_SIZE)
+        self.fulfillment_snapshot = self.order_tracker.snapshot(self.steps)
         
         # Init Agents
         self.pools = [Pooler_Agent(self, "POOL_1")]
@@ -91,6 +94,10 @@ class CLSC_Model(mesa.Model):
             ),
         })
 
+        # Measurement-only order metrics (all quantities in RTIs).
+        for field in self.fulfillment_snapshot:
+            reporters[f"Fulfillment|{field}"] = lambda m, key=field: m.fulfillment_snapshot[key]
+
         self.datacollector = mesa.DataCollector(model_reporters=reporters)
         self.datacollector.collect(self)
 
@@ -139,6 +146,15 @@ class CLSC_Model(mesa.Model):
                 screening_df = df_wide[['Step', *screening_cols]].copy()
                 screening_df.columns = ['Step'] + [c.split('|', 1)[1] for c in screening_cols]
                 screening_df.to_excel(writer, sheet_name='Screening', index=False)
+
+            fulfillment_cols = [c for c in df_wide.columns if c.startswith('Fulfillment|')]
+            if fulfillment_cols:
+                fulfillment_df = df_wide[['Step', *fulfillment_cols]].copy()
+                fulfillment_df.columns = ['Step'] + [c.split('|', 1)[1] for c in fulfillment_cols]
+                fulfillment_df.to_excel(writer, sheet_name='Fulfillment', index=False)
+            tracker = getattr(self, 'order_tracker', None)
+            if tracker is not None:
+                pd.DataFrame(tracker.audit_rows(self.steps)).to_excel(writer, sheet_name='OrderAudit', index=False)
                 
         print(f"\nSimulation log exported successfully: {filename}")
     
@@ -153,4 +169,5 @@ class CLSC_Model(mesa.Model):
         self.pool_agent.step()
         # IMPROVEMENT: Completely removed the O(N) loop iterating over all agents 
         # to reset "transported_this_step", eliminating huge overhead at the end of each step.
+        self.fulfillment_snapshot = self.order_tracker.snapshot(self.steps)
         self.datacollector.collect(self)

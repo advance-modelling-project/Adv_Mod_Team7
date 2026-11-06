@@ -93,6 +93,7 @@ class Pooler_Agent(mesa.Agent):
                 self.model.daily_log['movements']['pool_to_pro'][order.issuer][
                     order.crate_type] += extracted_qty_uls * self.model.config.UL_SIZE
 
+            self.model.order_tracker.deliver(order, extracted_qty_uls, self.model.steps)
             shortage_uls = order.quantity - extracted_qty_uls
             if shortage_uls > 0:
                 order.quantity = shortage_uls
@@ -201,6 +202,7 @@ class Producer_Agent(mesa.Agent):
                     creation_step=self.model.steps, needs_washed=requires_washing
                 )
                 self.model.pool_agent.receive_orders(order)
+                self.model.order_tracker.register(order)
 
                 # IMPROVEMENT: Store a lightweight dictionary instead of copy.copy(order).
                 # This prevents memory leaks caused by an ever-growing list of complex objects.
@@ -251,6 +253,7 @@ class Producer_Agent(mesa.Agent):
                 self.model.rdc_agent.receive_rtis(extracted_rtis)
                 self.model.daily_log['movements']['pro_to_rdc'][self.producer_id][order.crate_type] += extracted_qty
 
+            self.model.order_tracker.deliver(order, extracted_qty, self.model.steps)
             shortage = order.quantity - extracted_qty
             if shortage > 0:
                 order.quantity = shortage
@@ -311,6 +314,7 @@ class RDC_Agent(mesa.Agent):
                 'UoM': order.uom, 'Lead Time': order.lead_time, 'Needs Wash': 'N/A'
             })
             target_producer.receive_orders(order)
+            self.model.order_tracker.register(order)
 
     def receive_rtis(self, rtis: List[RTI_Agent]):
         current_step = self.model.steps
