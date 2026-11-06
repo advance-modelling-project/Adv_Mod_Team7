@@ -117,6 +117,12 @@ class Pooler_Agent(mesa.Agent):
         uls_to_screen = uls[:num_uls_to_screen] if num_uls_to_screen > 0 else []
         uls_to_bypass = uls[num_uls_to_screen:]
 
+        # Measurement only: do not change how loads are selected.
+        screen_log = self.model.daily_log['screening']
+        screen_log['arrived_uls'] += len(uls)
+        screen_log['screened_uls'] += len(uls_to_screen)
+        screen_log['bypassed_uls'] += len(uls_to_bypass)
+
         for ul in uls_to_screen:
             self.processing_buffer.append(ul)
             self.processing_times[ul.id] = current_step
@@ -130,6 +136,9 @@ class Pooler_Agent(mesa.Agent):
         current_time = self.model.steps
         ready_uls = [ul for ul in self.processing_buffer if
                      current_time - self.processing_times.get(ul.id, current_time) >= self.processing_lead_time]
+
+        # ULs finishing recovery today (may differ from ULs screened today).
+        self.model.daily_log['screening']['processed_uls'] += len(ready_uls)
 
         for ul in ready_uls:
             for rti in ul.rtis:
