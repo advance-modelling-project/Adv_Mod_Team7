@@ -7,3 +7,4 @@ dependencies:
   - mesa=3.5.1
   - pandas=3.0.6
   - openpyxl=3.1.5
+  - matplotlib=3.11.2
