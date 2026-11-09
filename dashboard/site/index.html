@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a101e">
+  <meta name="description" content="Team 7 supply-chain simulation control room — scenario replays, KPI comparisons and versioned reports.">
+  <title>Orbit / Team 07 — Simulation Control Room</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="Team 7 control room">
+      <span class="brand-symbol"><span></span><span></span><span></span></span>
+      <span class="brand-name">ORBIT <small>CONTROL ROOM</small></span>
+    </a>
+    <div class="side-label">WORKSPACE</div>
+    <nav class="side-nav" aria-label="Main navigation">
+      <button class="nav-btn active" data-nav="overview"><span class="nav-icon">◫</span> Overview</button>
+      <button class="nav-btn" data-nav="replay"><span class="nav-icon">◉</span> Simulation replay</button>
+      <button class="nav-btn" data-nav="comparison"><span class="nav-icon">◧</span> Scenario lab</button>
+      <button class="nav-btn" data-nav="reports"><span class="nav-icon">▤</span> Report library <span id="report-count" class="nav-count">0</span></button>
+    </nav>
+    <div class="side-label side-label-secondary">TEAM 07</div>
+    <div class="side-info"><span class="side-dot"></span><span>Advanced Modeling<br>for Operations</span></div>
+    <div class="side-spacer"></div>
+    <div class="side-footer">
+      <div class="side-footer-title">BUILD PIPELINE <span id="pipeline-dot" class="live-dot"></span></div>
+      <p id="side-build">Waiting for published data</p>
+      <a href="https://github.com/ylhhh4/Adv_Mod_Team7/actions" target="_blank" rel="noopener noreferrer">GitHub Actions <span aria-hidden="true">↗</span></a>
+    </div>
+  </aside>
+
+  <div class="main-shell">
+    <header class="topbar">
+      <div class="breadcrumb"><span>Team 07</span><span class="slash">/</span><strong id="current-section">Overview</strong></div>
+      <div class="top-actions"><span id="run-status" class="status-pill"><span class="live-dot"></span> Awaiting data</span><button id="refresh" class="icon-button" title="Check for newly published data" aria-label="Refresh published data">⟳</button><a class="github-button" href="https://github.com/ylhhh4/Adv_Mod_Team7" target="_blank" rel="noopener noreferrer">View repository <span>↗</span></a></div>
+    </header>
+    <main id="main">
+      <div id="notice" class="notice hidden" role="status"></div>
+
+      <section id="overview" class="view active">
+        <div class="page-header"><div><div class="eyebrow"><span class="eyebrow-line"></span> CLOSED-LOOP INTELLIGENCE PLATFORM</div><h1>Operations, <em>in motion.</em></h1><p class="lede">Explore the 29-node reusable crate network through published simulations, validated performance measures, and real project research.</p></div><div class="hero-mark"><span>29</span><small>NETWORK NODES</small></div></div>
+        <div class="overview-meta"><div class="metric-label"><span class="signal"></span><span id="build-date">PUBLISHED DATA UNAVAILABLE</span></div><div id="overview-source" class="meta-detail">Run data is compiled in GitHub Actions</div></div>
+        <div id="overview-kpis" class="kpi-grid"></div>
+        <div class="two-column overview-lower">
+          <section class="surface chart-surface"><div class="surface-heading"><div><div class="eyebrow tiny">INVENTORY HISTORY</div><h2>Stock through the year</h2></div><span class="section-pill">365 DAY SIMULATION</span></div><div class="chart-controls"><label for="overview-metric">Measure</label><select id="overview-metric" class="control-select"><option value="pool_washed">Pooler · washed</option><option value="pool_unwashed">Pooler · unwashed</option><option value="producer">Producers · combined</option><option value="rpos_display">Retail · displayed</option></select></div><div class="chart-wrap"><canvas id="overview-chart" aria-label="Stock history line chart" role="img"></canvas><div id="overview-chart-empty" class="empty-state hidden">Run data will appear here after the first successful deployment.</div></div></section>
+          <section class="surface insight-surface"><div class="surface-heading"><div><div class="eyebrow tiny">SYSTEM PULSE</div><h2>Decision intelligence</h2></div><span class="pulse-orb"></span></div><p class="insight-copy">The goal is not simply to wash more crates. It is to improve <strong>availability, recovery and circularity</strong> with traceability-informed decisions.</p><div class="insight-items"><div><span class="insight-number">01</span><div><strong>Observe</strong><small>Measure stock, demand and bottlenecks.</small></div></div><div><span class="insight-number">02</span><div><strong>Intervene</strong><small>Change decisions using RFID-level information.</small></div></div><div><span class="insight-number">03</span><div><strong>Evaluate</strong><small>Compare scenarios under controlled conditions.</small></div></div></div><button class="text-link" data-goto="comparison">Explore scenario comparison <span>↗</span></button></section>
+        </div>
+      </section>
+
+      <section id="replay" class="view">
+        <div class="section-top"><div><div class="eyebrow"><span class="eyebrow-line"></span> DIGITAL TWIN / REPLAY</div><h1>Follow every <em>movement.</em></h1><p class="lede compact">Animate daily aggregate flows. This is a replay of completed simulations, not a live execution of Python.</p></div><div class="selector-wrap"><label for="replay-scenario">ACTIVE SCENARIO</label><select id="replay-scenario" class="control-select scenario-select"></select></div></div>
+        <div class="surface network-surface"><div class="surface-heading"><div><div class="eyebrow tiny">SUPPLY CHAIN NETWORK</div><h2>Crate circulation</h2></div><span class="section-pill" id="replay-day-label">DAY 0 / 365</span></div>
+          <div class="network-key"><span><i class="key-dot forward"></i>Forward circulation</span><span><i class="key-dot return"></i>Reverse circulation</span><span><i class="key-dot node"></i>Recorded stock</span></div>
+          <div class="network-stage"><svg id="network-svg" viewBox="0 0 1050 372" role="img" aria-label="Animated four-echelon supply network"><defs><linearGradient id="forwardGrad"><stop offset="0" stop-color="#53e0cc"/><stop offset="1" stop-color="#4f9afd"/></linearGradient><linearGradient id="returnGrad"><stop offset="0" stop-color="#f7be7e"/><stop offset="1" stop-color="#e97d9f"/></linearGradient><filter id="softglow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g id="network-flows"></g><g id="network-nodes"></g><g id="network-particles"></g></svg></div>
+          <div class="replay-controls"><button id="play" class="play-button" title="Play or pause simulation" aria-label="Play replay">▶</button><button id="step-back" class="small-control" aria-label="Previous day">↶</button><div class="timeline"><div class="timeline-top"><span>DAY <strong id="scrub-day">0</strong></span><span id="scrub-status">Ready to replay</span></div><input id="day-range" type="range" min="0" max="365" value="0" aria-label="Simulation day"/><div class="timeline-ends"><span>START</span><span id="timeline-end">DAY 365</span></div></div><button id="step-forward" class="small-control" aria-label="Next day">↷</button><select id="speed" class="control-select compact-select" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></div>
+        </div>
+        <div id="replay-stats" class="replay-stat-grid"></div>
+        <div class="two-column replay-lower"><section class="surface"><div class="surface-heading"><div><div class="eyebrow tiny">DAILY MOVEMENTS</div><h2>Flow intensity</h2></div><span class="section-pill">RTIs / DAY</span></div><div id="flow-bars" class="flow-bars"></div></section><section class="surface"><div class="surface-heading"><div><div class="eyebrow tiny">CONTEXT</div><h2>How to read the replay</h2></div></div><p class="insight-copy">Particles represent recorded daily <strong>aggregate shipments</strong>. They illustrate direction and relative volume—not individual RFID tags, travel duration, or live warehouse positions.</p><div id="replay-footnote" class="context-footnote"></div></section></div>
+      </section>
+
+      <section id="comparison" class="view">
+        <div class="section-top"><div><div class="eyebrow"><span class="eyebrow-line"></span>PERFORMANCE LAB</div><h1>Measure the <em>difference.</em></h1><p class="lede compact">Compare published scenarios. Results are descriptive single-run estimates until replicated experiments are available.</p></div></div>
+        <div id="comparison-legend" class="scenario-legend"></div>
+        <div id="comparison-grid" class="compare-grid"></div>
+        <section class="surface compare-chart-surface"><div class="surface-heading"><div><div class="eyebrow tiny">TRAJECTORIES</div><h2>Compare operating behavior</h2></div><select id="compare-metric" class="control-select"><option value="pool_washed">Pooler washed inventory</option><option value="pool_unwashed">Pooler unwashed inventory</option><option value="producer">Producer inventory</option><option value="rpos_display">Retail displayed RTIs</option><option value="backorders">Recorded backorders</option><option value="producer_fill">RDC order fill rate</option><option value="pooler_fill">Pooler order fill rate</option><option value="detention_pool">Completed Pooler detention</option><option value="detention_pro">Completed producer detention</option></select></div><div class="chart-wrap"><canvas id="compare-chart" aria-label="Comparison time-series chart" role="img"></canvas><div id="compare-chart-empty" class="empty-state hidden">The comparison will appear after two scenarios have been published.</div></div></section>
+        <p class="method-note"><span>ⓘ</span> A shared random seed improves repeatability but does not guarantee common random-number streams when scenario decisions consume randomness differently. Do not interpret a single-run difference as a statistically significant effect.</p>
+      </section>
+
+      <section id="reports" class="view">
+        <div class="section-top"><div><div class="eyebrow"><span class="eyebrow-line"></span>RESEARCH ARCHIVE</div><h1>Every insight, <em>documented.</em></h1><p class="lede compact">Markdown reports from the repository, published automatically when changes reach <code>main</code>.</p></div><div class="reports-tools"><input type="search" id="report-search" placeholder="Search reports..." aria-label="Search reports"/></div></div>
+        <div class="reports-layout"><div class="surface reports-list"><div class="list-title">PUBLISHED REPORTS <span id="report-list-count">0</span></div><div id="report-items"></div></div><article class="surface reader"><div class="reader-toolbar"><div class="reader-label"><span class="reader-dot"></span> MARKDOWN DOCUMENT</div><div class="reader-tools"><button id="toggle-source" class="text-control">View source</button><button id="copy-report" class="text-control">Copy Markdown</button></div></div><div id="report-body" class="markdown"><div class="empty-report"><span>▤</span><h2>Select a report</h2><p>Choose a document to open its published Markdown.</p></div></div></article></div>
+      </section>
+    </main>
+    <footer class="footer"><span>ORBIT / TEAM 07</span><span>Powered by Python · Mesa · GitHub Pages</span><span id="footer-sha">No published commit</span></footer>
+  </div>
+</div>
+<script src="app.js" defer></script>
+</body>
+</html>

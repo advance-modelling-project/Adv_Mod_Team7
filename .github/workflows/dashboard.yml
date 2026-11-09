@@ -1,0 +1,96 @@
+name: Publish Team 7 Control Room
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: team7-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Verify dashboard and simulation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt mistune bleach
+      - name: Simulation unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Dashboard build tests
+        run: python -m unittest discover -s dashboard -p 'test_*.py' -v
+      - name: JavaScript syntax check
+        run: |
+          node --check dashboard/site/app.js
+
+  publish:
+    name: Simulate and deploy GitHub Pages
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt mistune bleach
+      - name: Run every scenario supported by the merged code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q -- '--scenario' main.py; then
+            # Extend this list when additional supported scenarios are introduced.
+            python main.py --scenario baseline --seed 42
+            python main.py --scenario traceability --seed 42
+          else
+            # Backward compatible with the current main branch, prior to Task 1 merge.
+            python main.py
+          fi
+      - name: Compile dashboard datasets and repository Markdown reports
+        run: |
+          python dashboard/build_data.py \
+            --runs-root . \
+            --reports analysis/reports \
+            --site dashboard/site \
+            --output dashboard/dist \
+            --sha "$GITHUB_SHA" \
+            --seed 42
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload published site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dashboard/dist
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
