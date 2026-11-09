@@ -126,7 +126,54 @@ class Pooler_Agent(mesa.Agent):
             stock.remove(ul)
         return selected
 
+    # BASELINE_PARITY_V1: faithful Pooler UL selection, traceability unchanged
+    def _assignment_baseline_extract_uls(self, crate_type, needs_washed, quantity_uls):
+        """Exact assignment baseline's UL selection and RNG calls.
+
+        A producer order with needs_washed=True can use only washed loads.
+        A flexible order prefers unwashed loads and uses washed as fallback.
+        This routine intentionally preserves random.sample branches and
+        stock-exhaustion behavior; it is invoked ONLY with RFID disabled.
+        """
+        if needs_washed is True:
+            primary_stock = self.washed_stock_pool[crate_type]
+            secondary_stock = []
+        else:
+            primary_stock = self.unwashed_stock_pool[crate_type]
+            secondary_stock = self.washed_stock_pool[crate_type]
+
+        primary_available = len(primary_stock)
+        secondary_available = len(secondary_stock)
+        total_available = primary_available + secondary_available
+        selected_uls = []
+
+        if total_available >= quantity_uls:
+            if primary_available >= quantity_uls:
+                selected_uls = random.sample(primary_stock, quantity_uls)
+                for ul in selected_uls:
+                    primary_stock.remove(ul)
+            else:
+                selected_primary = list(primary_stock)
+                primary_stock.clear()
+                needed = quantity_uls - primary_available
+                selected_secondary = random.sample(secondary_stock, needed)
+                for ul in selected_secondary:
+                    secondary_stock.remove(ul)
+                selected_uls = selected_primary + selected_secondary
+        else:
+            selected_uls = list(primary_stock) + list(secondary_stock)
+            primary_stock.clear()
+            if secondary_stock:
+                secondary_stock.clear()
+        return selected_uls
+
     def extract_uls(self, crate_type: CrateType, needs_washed: Optional[bool], quantity_uls: int) -> List[UnitLoad]:
+        # BASELINE_PARITY_V1: use the actual assignment baseline selection rule.
+        if not self.model.config.TRACEABILITY_ENABLED:
+            return self._assignment_baseline_extract_uls(
+                crate_type, needs_washed, quantity_uls
+            )
+
         washed_stock = self.washed_stock_pool[crate_type]
         unwashed_stock = self.unwashed_stock_pool[crate_type]
 
