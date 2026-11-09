@@ -2,11 +2,10 @@ import os
 import random
 import csv
 from datetime import datetime
-from config import SimulationConfig
-from model import CLSC_Model
 
-# 2. 实例化配置对象
-config_params = SimulationConfig()
+# 直接从 config 导入，与 main.py 保持一致
+from config import SIMULATION_STEPS
+from model import CLSC_Model
 
 # =============================================================================
 # RUN PARAMETERS
@@ -21,6 +20,7 @@ if __name__ == "__main__":
     run_folder = f"run_{current_timestamp}"
     os.makedirs(run_folder, exist_ok=True)
 
+    # 生成并记录随机种子
     random.seed(BASE_SEED)
     run_seeds = [random.randint(0, 999999) for _ in range(NUM_REPLICATIONS)]
 
@@ -31,25 +31,24 @@ if __name__ == "__main__":
         for run_id, seed in enumerate(run_seeds):
             writer.writerow([run_id + 1, seed])
 
+    # 执行多次模拟
     for run_id in range(NUM_REPLICATIONS):
         current_seed = run_seeds[run_id]
         random.seed(current_seed)
 
         print(f"\n--- Replication {run_id + 1}/{NUM_REPLICATIONS} | Seed: {current_seed} ---")
 
-        # 实例化模型时，可能也需要把 config_params 传进去（取决于你 model.py 怎么接收）
         model = CLSC_Model(results_dir=run_folder, run_timestamp=f"{current_timestamp}_rep{run_id + 1}")
 
-        # 3. 调用时加上 config_params. 前缀
-        for step in range(config_params.SIMULATION_STEPS):
+        for step in range(SIMULATION_STEPS):
             model.step()
 
-            progress_pct = ((step + 1) / config_params.SIMULATION_STEPS) * 100
-            bar_length = 50
-            filled = int(bar_length * (step + 1) / config_params.SIMULATION_STEPS)
+            # 与 main.py 对齐的进度条样式
+            progress_pct = ((step + 1) / SIMULATION_STEPS) * 100
+            bar_length = 70
+            filled = int(bar_length * (step + 1) / SIMULATION_STEPS)
             bar = '█' * filled + '░' * (bar_length - filled)
-            print(f"\r[{bar}] {progress_pct:.1f}% | Step {step + 1:3d}/{config_params.SIMULATION_STEPS}", end='',
-                  flush=True)
+            print(f"\r[{bar}] {progress_pct:.1f}% | Step (Day) {step + 1:3d}/{SIMULATION_STEPS}", end='', flush=True)
 
         print()
         model.export_to_excel()

@@ -1,8 +1,11 @@
 import uuid
+import copy
 import random
 import mesa
 from typing import List, Dict, Optional
-from config import CrateType, Product, OrderLine, UnitLoad, LocationType
+
+# Import everything from the merged config
+from config import *
 
 
 class RTI_Agent(mesa.Agent):
@@ -10,69 +13,95 @@ class RTI_Agent(mesa.Agent):
                  location: LocationType = LocationType.POOL, is_filled: bool = False,
                  product: Optional[Product] = None):
         super().__init__(model)
-        self.crate_type = crate_type if crate_type else list(CrateType)[0]
+
+        if crate_type is None:
+            crate_type = list(CrateType)[0]
+
         self.rti_id = str(uuid.uuid4())
+        self.crate_type = crate_type
         self.product = product
         self.is_filled = is_filled
         self.under_processing = False
         self.washed = washed
         self.location = location
-        # IMPROVEMENT: Replaced highly inefficient O(N) detention_time increment loop
-        # with a simple O(1) timestamp marker (arrival_step).
-        self.arrival_step = model.steps
+        self.arrival_time_at_node = self.model.steps
         self.broken = False
         self.dirty = False
+        self.goes_to_stock_after_processing = True
+        self.transported_this_step = False
+
+    @property
+    def detention_time(self):
+        return self.model.steps - self.arrival_time_at_node
+
+    @detention_time.setter
+    def detention_time(self, val):
+        self.arrival_time_at_node = self.model.steps - val
 
 
 class Pooler_Agent(mesa.Agent):
     def __init__(self, model, pool_id: str):
         super().__init__(model)
         self.pool_id = pool_id
-        cfg = self.model.config
 
         self.washed_stock_pool = {
             ct: [UnitLoad(crate_type=ct,
                           rtis=[RTI_Agent(self.model, ct, washed=True, location=LocationType.POOL) for _ in
-                                range(cfg.UL_SIZE)]) for _ in range(cfg.INIT_POOL_WASHED_UL)]
+                                range(UL_SIZE)]) for _ in range(INIT_POOL_WASHED_UL)]
             for ct in CrateType
         }
+
         self.unwashed_stock_pool = {
             ct: [UnitLoad(crate_type=ct,
                           rtis=[RTI_Agent(self.model, ct, washed=False, location=LocationType.POOL) for _ in
-                                range(cfg.UL_SIZE)]) for _ in range(cfg.INIT_POOL_UNWASHED_UL)]
+                                range(UL_SIZE)]) for _ in range(INIT_POOL_UNWASHED_UL)]
             for ct in CrateType
         }
+
         self.processing_buffer = []
         self.processing_times = {}
-        self.processing_lead_time = cfg.POOL_PROCESSING_TIME
+        self.processing_lead_time = POOL_PROCESSING_TIME
         self.order_book: List[OrderLine] = []
 
     def receive_orders(self, order: OrderLine):
         self.order_book.append(order)
 
     def extract_uls(self, crate_type: CrateType, needs_washed: Optional[bool], quantity_uls: int) -> List[UnitLoad]:
-        primary_stock = self.washed_stock_pool[crate_type] if needs_washed else self.unwashed_stock_pool[crate_type]
-        secondary_stock = [] if needs_washed else self.washed_stock_pool[crate_type]
+        if needs_washed is True:
+            primary_stock = self.washed_stock_pool[crate_type]
+            secondary_stock = []
+        else:
+            primary_stock = self.unwashed_stock_pool[crate_type]
+            secondary_stock = self.washed_stock_pool[crate_type]
 
         primary_available = len(primary_stock)
+        secondary_available = len(secondary_stock)
+        total_available = primary_available + secondary_available
+
         selected_uls = []
 
-        # IMPROVEMENT: Removed 2 occurrences of random.sample() from the baseline code.
-        # Since UnitLoads of the same crate type and wash status are identical (fungible),
-        # random extraction is unnecessary. Replaced with O(1) list slicing for a massive speed boost.
-        if primary_available >= quantity_uls:
-            selected_uls = primary_stock[:quantity_uls]
-            del primary_stock[:quantity_uls]
-        else:
-            selected_uls.extend(primary_stock)
-            primary_stock.clear()
-            needed = quantity_uls - primary_available
-            if len(secondary_stock) >= needed:
-                selected_uls.extend(secondary_stock[:needed])
-                del secondary_stock[:needed]
+        if total_available >= quantity_uls:
+            if primary_available >= quantity_uls:
+                selected_uls = random.sample(primary_stock, quantity_uls)
+                for ul in selected_uls:
+                    primary_stock.remove(ul)
             else:
-                selected_uls.extend(secondary_stock)
+                selected_primary = list(primary_stock)
+                primary_stock.clear()
+
+                needed = quantity_uls - primary_available
+                selected_secondary = random.sample(secondary_stock, needed)
+                for ul in selected_secondary:
+                    secondary_stock.remove(ul)
+
+                selected_uls = selected_primary + selected_secondary
+
+        else:
+            selected_uls = list(primary_stock) + list(secondary_stock)
+            primary_stock.clear()
+            if secondary_stock:
                 secondary_stock.clear()
+
         return selected_uls
 
     def fulfill_orders(self):
@@ -87,13 +116,15 @@ class Pooler_Agent(mesa.Agent):
                 for ul in extracted_uls:
                     for rti in ul.rtis:
                         rti.location = LocationType.TRANSPORT
+                        rti.transported_this_step = True
+                        rti.detention_time = 0
 
                 target_pro = self.model.producers_by_id[order.issuer]
                 target_pro.receive_uls(extracted_uls)
-                self.model.daily_log['movements']['pool_to_pro'][order.issuer][
-                    order.crate_type] += extracted_qty_uls * self.model.config.UL_SIZE
 
-            self.model.order_tracker.deliver(order, extracted_qty_uls, self.model.steps)
+                self.model.daily_log['movements']['pool_to_pro'][order.issuer][
+                    order.crate_type] += extracted_qty_uls * UL_SIZE
+
             shortage_uls = order.quantity - extracted_qty_uls
             if shortage_uls > 0:
                 order.quantity = shortage_uls
@@ -104,25 +135,14 @@ class Pooler_Agent(mesa.Agent):
         current_step = self.model.steps
         for ul in uls:
             for rti in ul.rtis:
-                self.evaluate_rti_condition(rti)
+                self.evaluate_rti_condition(rti, current_step)
                 rti.location = LocationType.POOL
-                rti.arrival_step = current_step
         self.screen_uls(uls, current_step)
 
     def screen_uls(self, uls: List[UnitLoad], current_step: int):
-        num_uls_to_screen = min(len(uls), self.model.config.POOL_SCREENING_CAPACITY)
-
-        # IMPROVEMENT: Removed 1 occurrence of random.sample() from the baseline code.
-        # Bypassed vs screened unit loads don't need randomized selection because
-        # they are freshly arrived and homogenous. Used list slicing instead for speed.
-        uls_to_screen = uls[:num_uls_to_screen] if num_uls_to_screen > 0 else []
-        uls_to_bypass = uls[num_uls_to_screen:]
-
-        # Measurement only: do not change how loads are selected.
-        screen_log = self.model.daily_log['screening']
-        screen_log['arrived_uls'] += len(uls)
-        screen_log['screened_uls'] += len(uls_to_screen)
-        screen_log['bypassed_uls'] += len(uls_to_bypass)
+        num_uls_to_screen = min(len(uls), POOL_SCREENING_CAPACITY)
+        uls_to_screen = random.sample(uls, num_uls_to_screen) if num_uls_to_screen > 0 else []
+        uls_to_bypass = [ul for ul in uls if ul not in uls_to_screen]
 
         for ul in uls_to_screen:
             self.processing_buffer.append(ul)
@@ -135,16 +155,16 @@ class Pooler_Agent(mesa.Agent):
 
     def process_uls(self):
         current_time = self.model.steps
-        ready_uls = [ul for ul in self.processing_buffer if
-                     current_time - self.processing_times.get(ul.id, current_time) >= self.processing_lead_time]
 
-        # ULs finishing recovery today (may differ from ULs screened today).
-        self.model.daily_log['screening']['processed_uls'] += len(ready_uls)
+        ready_uls = [ul for ul in self.processing_buffer
+                     if current_time - self.processing_times.get(ul.id, current_time) >= self.processing_lead_time]
 
         for ul in ready_uls:
             for rti in ul.rtis:
                 self.process_rti(rti)
                 rti.under_processing = False
+                rti.goes_to_stock_after_processing = True
+
             self.washed_stock_pool[ul.crate_type].append(ul)
             self.processing_buffer.remove(ul)
             del self.processing_times[ul.id]
@@ -153,15 +173,18 @@ class Pooler_Agent(mesa.Agent):
         if rti.broken:
             rti.broken = False
             rti.dirty = True
+
         rti.dirty = False
         rti.washed = True
         return rti
 
-    def evaluate_rti_condition(self, rti: RTI_Agent):
-        if random.random() < self.model.config.RTI_BREAKAGE_RATE:
+    def evaluate_rti_condition(self, rti: RTI_Agent, current_step: int):
+        if random.random() < RTI_BREAKAGE_RATE:
             rti.broken = True
-        if not rti.dirty and rti.product is not None and rti.product.makes_dirty:
-            rti.dirty = True
+
+        if not rti.dirty:
+            if rti.product is not None and rti.product.makes_dirty:
+                rti.dirty = True
         rti.product = None
 
     def step(self):
@@ -177,50 +200,51 @@ class Producer_Agent(mesa.Agent):
         self.compatible_crates = set(self.product.compatible_crates)
         self.order_book: List[OrderLine] = []
         self.on_order_from_pool = {ct: 0 for ct in CrateType}
-        cfg = self.model.config
+
         self.forward_stock_pro = {
-            ct: [RTI_Agent(self.model, ct, washed=False, location=LocationType.PRO) for _ in
-                 range(cfg.INIT_PRO_UL * cfg.UL_SIZE)] if ct in self.compatible_crates else []
+            ct: [RTI_Agent(self.model, ct, washed=False, location=LocationType.PRO, is_filled=False) for _ in
+                 range(INIT_PRO_UL * UL_SIZE)] if ct in self.compatible_crates else []
             for ct in CrateType
         }
 
     def generate_orders(self):
-        cfg = self.model.config
         for ct in self.compatible_crates:
             physical_stock = len(self.forward_stock_pro[ct])
             transit_stock = self.on_order_from_pool[ct]
             backordered_stock = sum(o.quantity for o in self.order_book if o.crate_type == ct)
+
             inventory_position = physical_stock + transit_stock - backordered_stock
 
-            if inventory_position <= cfg.PRO_REORDER_POINT:
-                self.on_order_from_pool[ct] += cfg.PRO_REORDER_QTY * cfg.UL_SIZE
-                requires_washing = random.random() < cfg.WASHING_REQUIREMENT_RATE
+            if inventory_position <= PRO_REORDER_POINT:
+                rtis_ordered = PRO_REORDER_QTY * UL_SIZE
+
+                self.on_order_from_pool[ct] += rtis_ordered
+
+                requires_washing_this_time = random.random() < WASHING_REQUIREMENT_RATE
 
                 order = OrderLine(
-                    issuer=self.producer_id, supplier=self.model.pool_agent.pool_id, order_id=str(uuid.uuid4()),
-                    crate_type=ct, quantity=cfg.PRO_REORDER_QTY, uom='UL', lead_time=cfg.PRO_ORDER_LT,
-                    creation_step=self.model.steps, needs_washed=requires_washing
+                    issuer=self.producer_id,
+                    supplier=self.model.pool_agent.pool_id,
+                    order_id=str(uuid.uuid4()),
+                    crate_type=ct,
+                    quantity=PRO_REORDER_QTY,
+                    uom='UL',
+                    lead_time=PRO_ORDER_LT,
+                    creation_step=self.model.steps,
+                    product=None,
+                    needs_washed=requires_washing_this_time
                 )
                 self.model.pool_agent.receive_orders(order)
-                self.model.order_tracker.register(order)
-
-                # IMPROVEMENT: Store a lightweight dictionary instead of copy.copy(order).
-                # This prevents memory leaks caused by an ever-growing list of complex objects.
-                self.model.all_orders.append({
-                    'Step': order.creation_step, 'Order ID': order.order_id, 'Issuer': order.issuer,
-                    'Supplier': order.supplier, 'Crate Type': order.crate_type.name, 'Quantity': order.quantity,
-                    'UoM': order.uom, 'Lead Time': order.lead_time, 'Needs Wash': order.needs_washed
-                })
+                self.model.all_orders.append(copy.copy(order))
 
     def receive_uls(self, uls: List[UnitLoad]):
         if not uls: return
-        current_step = self.model.steps
+
         for ul in uls:
             for rti in ul.rtis:
                 self.on_order_from_pool[rti.crate_type] = max(0, self.on_order_from_pool[rti.crate_type] - 1)
                 rti.location = LocationType.PRO
                 rti.washed = False
-                rti.arrival_step = current_step
                 self.forward_stock_pro[rti.crate_type].append(rti)
 
     def receive_orders(self, order: OrderLine):
@@ -228,14 +252,16 @@ class Producer_Agent(mesa.Agent):
 
     def extract_rtis(self, quantity: int, crate_type: CrateType) -> List[RTI_Agent]:
         available = self.forward_stock_pro[crate_type]
-        qty_to_sample = min(quantity, len(available))
-        if qty_to_sample == 0: return []
+        available_qty = len(available)
 
-        # IMPROVEMENT: Removed 1 occurrence of random.sample() from the baseline code.
-        # Empty RTIs are identical, so picking randomly adds linear overhead O(N) for no reason.
-        # Replaced with O(1) list slicing.
-        rtis_to_send = available[:qty_to_sample]
-        del available[:qty_to_sample]
+        if available_qty == 0:
+            return []
+
+        qty_to_sample = min(quantity, available_qty)
+        rtis_to_send = random.sample(available, qty_to_sample)
+
+        for rti in rtis_to_send:
+            available.remove(rti)
         return rtis_to_send
 
     def fulfill_orders(self):
@@ -245,15 +271,18 @@ class Producer_Agent(mesa.Agent):
         for order in due_orders:
             extracted_rtis = self.extract_rtis(order.quantity, order.crate_type)
             extracted_qty = len(extracted_rtis)
+
             if extracted_qty > 0:
                 for rti in extracted_rtis:
                     rti.is_filled = True
                     rti.product = order.product
                     rti.location = LocationType.TRANSPORT
+                    rti.transported_this_step = True
+                    rti.detention_time = 0
+
                 self.model.rdc_agent.receive_rtis(extracted_rtis)
                 self.model.daily_log['movements']['pro_to_rdc'][self.producer_id][order.crate_type] += extracted_qty
 
-            self.model.order_tracker.deliver(order, extracted_qty, self.model.steps)
             shortage = order.quantity - extracted_qty
             if shortage > 0:
                 order.quantity = shortage
@@ -270,30 +299,36 @@ class RDC_Agent(mesa.Agent):
         super().__init__(model)
         self.rdc_id = rdc_id
         self.forward_rtis_received_this_step = []
-        cfg = self.model.config
-        comp_prods = {ct: [p for p in self.model.products if ct in p.compatible_crates] for ct in CrateType}
 
+        comp_prods = {ct: [p for p in self.model.products if ct in p.compatible_crates] for ct in CrateType}
         self.reverse_stock_rdc = {
             ct: [
-                UnitLoad(crate_type=ct, rtis=[
-                    RTI_Agent(self.model, ct, washed=False, location=LocationType.R_DC, is_filled=False,
-                              product=random.choice(comp_prods[ct]) if comp_prods[ct] else None)
-                    for _ in range(cfg.UL_SIZE)])
-                for _ in range(cfg.INIT_RDC_UL)
+                UnitLoad(
+                    crate_type=ct,
+                    rtis=[
+                        RTI_Agent(
+                            self.model, ct, washed=False, location=LocationType.R_DC, is_filled=False,
+                            product=random.choice(comp_prods[ct]) if comp_prods[ct] else None
+                        ) for _ in range(UL_SIZE)
+                    ]
+                ) for _ in range(INIT_RDC_UL)
             ]
             for ct in CrateType
         }
 
     def generate_orders(self):
-        cfg = self.model.config
-        total_demand = max(0, int(random.gauss(cfg.RDC_DAILY_DEMAND_MEAN, cfg.RDC_DAILY_DEMAND_STD)))
-        if total_demand == 0: return
+        total_demand = max(0, int(random.gauss(RDC_DAILY_DEMAND_MEAN, RDC_DAILY_DEMAND_STD)))
+        if total_demand == 0:
+            return
 
         remaining_demand = total_demand
         while remaining_demand > 0:
             qty_to_request = min(remaining_demand, random.randint(500, 1000))
+
             potential_remainder = remaining_demand - qty_to_request
-            if 0 < potential_remainder < 100: qty_to_request += potential_remainder
+            if 0 < potential_remainder < 100:
+                qty_to_request += potential_remainder
+
             remaining_demand -= qty_to_request
 
             target_producer = random.choice(self.model.producers)
@@ -302,25 +337,23 @@ class RDC_Agent(mesa.Agent):
             lead_time = random.randint(1, 3)
 
             order = OrderLine(
-                issuer=self.rdc_id, supplier=target_producer.producer_id, order_id=str(uuid.uuid4()),
-                product=product, crate_type=crate_type, quantity=qty_to_request,
-                uom='RTI', lead_time=lead_time, creation_step=self.model.steps
+                issuer=self.rdc_id,
+                supplier=target_producer.producer_id,
+                order_id=str(uuid.uuid4()),
+                product=product,
+                crate_type=crate_type,
+                quantity=qty_to_request,
+                uom='RTI',
+                lead_time=lead_time,
+                creation_step=self.model.steps
             )
 
-            # IMPROVEMENT: Lightweight dictionary mapping to save memory over long simulations.
-            self.model.all_orders.append({
-                'Step': order.creation_step, 'Order ID': order.order_id, 'Issuer': order.issuer,
-                'Supplier': order.supplier, 'Crate Type': order.crate_type.name, 'Quantity': order.quantity,
-                'UoM': order.uom, 'Lead Time': order.lead_time, 'Needs Wash': 'N/A'
-            })
+            self.model.all_orders.append(copy.copy(order))
             target_producer.receive_orders(order)
-            self.model.order_tracker.register(order)
 
     def receive_rtis(self, rtis: List[RTI_Agent]):
-        current_step = self.model.steps
         for rti in rtis:
             rti.location = LocationType.R_DC
-            rti.arrival_step = current_step
             self.forward_rtis_received_this_step.append(rti)
 
     def extract_rtis(self) -> List[RTI_Agent]:
@@ -331,6 +364,7 @@ class RDC_Agent(mesa.Agent):
     def allocate_rtis(self, rtis: List[RTI_Agent]) -> Dict:
         if not rtis: return {}
         clusters = {'small': [], 'medium': [], 'big': []}
+
         for rpos in self.model.r_pos_agents: clusters[rpos.size].append(rpos)
 
         weights = {'small': 1, 'medium': 2, 'big': 3}
@@ -361,98 +395,102 @@ class RDC_Agent(mesa.Agent):
     def dispatch_rtis(self):
         rtis = self.extract_rtis()
         if not rtis: return
+
         for rti in rtis:
             self.model.daily_log['movements']['rdc_to_pos'][rti.crate_type] += 1
 
-        # FIX: Restored random.shuffle to ensure fair and unbiased distribution among RPOS branches.
-        # This shuffle is critical for logical correctness, unlike the removed random.samples.
         random.shuffle(rtis)
-
         allocation = self.allocate_rtis(rtis)
+
         for rpos, rti_list in allocation.items():
             for rti in rti_list:
                 rti.location = LocationType.TRANSPORT
+                rti.transported_this_step = True
             rpos.receive_rtis(rti_list)
 
     def receive_uls(self, uls: List[UnitLoad]):
-        current_step = self.model.steps
         for ul in uls:
             for rti in ul.rtis:
                 rti.location = LocationType.R_DC
-                rti.arrival_step = current_step
+
             self.reverse_stock_rdc[ul.crate_type].append(ul)
 
     def extract_uls(self):
         all_available_uls = [ul for uls in self.reverse_stock_rdc.values() for ul in uls]
-        num_trucks = len(all_available_uls) // self.model.config.TRUCK_CAPACITY
-        if num_trucks == 0: return
+        num_trucks = len(all_available_uls) // TRUCK_CAPACITY
 
-        # FIX: Restored random.shuffle before slicing to prevent biased extraction (e.g., always taking TYPE_1 first).
-        # Ensures uniform return flows for different crate types back to the pooler.
+        if num_trucks == 0:
+            return
+
         random.shuffle(all_available_uls)
-        uls_to_ship = all_available_uls[:num_trucks * self.model.config.TRUCK_CAPACITY]
+        uls_to_ship = all_available_uls[:num_trucks * TRUCK_CAPACITY]
 
         for ul in uls_to_ship:
             self.reverse_stock_rdc[ul.crate_type].remove(ul)
             for rti in ul.rtis:
                 rti.location = LocationType.TRANSPORT
+                rti.transported_this_step = True
+                rti.detention_time = 0
             self.model.daily_log['movements']['rdc_to_pool'][ul.crate_type] += len(ul.rtis)
 
         self.model.pool_agent.receive_uls(uls_to_ship)
+
+    def step(self):
+        pass
 
 
 class RPOS_Agent(mesa.Agent):
     def __init__(self, model, size: str):
         super().__init__(model)
         self.size = size
-        self.display_time = self.model.config.RPOS_DISPLAY_TIME[size]
+        self.display_time = RPOS_DISPLAY_TIME[size]
         self.reverse_stock_rpos = {ct: [] for ct in CrateType}
+
         self.displayed_rtis_rpos = [
             RTI_Agent(self.model, ct, washed=False, location=LocationType.R_POS, is_filled=True)
-            for ct in CrateType for _ in range(self.model.config.INIT_RPOS_RTI)
+            for ct in CrateType for _ in range(INIT_RPOS_RTI)
         ]
 
     def receive_rtis(self, rtis: List[RTI_Agent]):
         current_step = self.model.steps
         for rti in rtis:
-            rti.arrival_step = current_step
+            rti.arrival_time_at_node = current_step
             rti.location = LocationType.R_POS
             self.displayed_rtis_rpos.append(rti)
 
     def process_sales(self):
         current_step = self.model.steps
-        # IMPROVEMENT: Replaced step-by-step detention increment loop with condition checks based on arrival_step.
-        ready = [rti for rti in self.displayed_rtis_rpos if current_step - rti.arrival_step >= self.display_time]
+        ready = [rti for rti in self.displayed_rtis_rpos
+                 if current_step - rti.arrival_time_at_node >= self.display_time]
 
-        # IMPROVEMENT: Replaced sequential .remove() inside loop with list comprehension for speed.
-        if ready:
-            # FIX: Convert 'ready' list to a set. This prevents the O(N*M) list comprehension bottleneck
-            # and reduces time complexity of the lookup down to O(N).
-            ready_set = set(ready)
-            self.displayed_rtis_rpos = [rti for rti in self.displayed_rtis_rpos if rti not in ready_set]
-
-            for rti in ready:
-                rti.is_filled = False
-                self.reverse_stock_rpos[rti.crate_type].append(rti)
+        for rti in ready:
+            self.displayed_rtis_rpos.remove(rti)
+            rti.is_filled = False
+            self.reverse_stock_rpos[rti.crate_type].append(rti)
 
     def extract_rtis(self):
         uls_to_dispatch = []
-        cfg = self.model.config
+
         for ct in CrateType:
             available_rtis = self.reverse_stock_rpos[ct]
-
-            # FIX: Restored random.shuffle to maintain realistic detention time variations.
             random.shuffle(available_rtis)
-
-            num_full_uls = len(available_rtis) // cfg.UL_SIZE
+            num_full_uls = len(available_rtis) // UL_SIZE
 
             for _ in range(num_full_uls):
-                rtis_for_ul = available_rtis[:cfg.UL_SIZE]
-                self.reverse_stock_rpos[ct] = available_rtis[cfg.UL_SIZE:]
+                ul = UnitLoad()
+                ul.crate_type = ct
+
+                rtis_for_ul = available_rtis[:UL_SIZE]
+                self.reverse_stock_rpos[ct] = available_rtis[UL_SIZE:]
                 available_rtis = self.reverse_stock_rpos[ct]
 
-                for rti in rtis_for_ul: rti.location = LocationType.TRANSPORT
-                uls_to_dispatch.append(UnitLoad(crate_type=ct, rtis=rtis_for_ul))
+                for rti in rtis_for_ul:
+                    rti.location = LocationType.TRANSPORT
+                    rti.transported_this_step = True
+                    rti.detention_time = 0
+                    ul.add_rti(rti)
+
+                uls_to_dispatch.append(ul)
 
         if uls_to_dispatch:
             for ul in uls_to_dispatch:
