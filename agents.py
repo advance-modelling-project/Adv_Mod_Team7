@@ -23,6 +23,68 @@ class RTI_Agent(mesa.Agent):
         self.broken = False
         self.dirty = False
 
+    @property
+    def detention_time(self) -> int:
+        """Current days spent at the RTI's current node (RFID tag field)."""
+        return max(0, self.model.steps - self.arrival_step)
+
+    def move_to_transport(self):
+        """Record node dwell time and reset the tag timer on departure."""
+        detention_log = self.model.daily_log.get('detention', {})
+        node = self.location.value
+        if node in detention_log:
+            detention_log[node]['total_days'] += self.detention_time
+            detention_log[node]['departures'] += 1
+        self.arrival_step = self.model.steps
+        self.location = LocationType.TRANSPORT
+
+
+def _ul_dirty_history_count(ul: UnitLoad) -> int:
+    """Count RTIs whose RFID product history indicates a dirty-making product."""
+    return sum(1 for rti in ul.rtis if rti.product is not None and rti.product.makes_dirty)
+
+
+def _ul_average_detention(ul: UnitLoad) -> float:
+    """Average current node detention time of the RTIs in a unit load."""
+    return (sum(rti.detention_time for rti in ul.rtis) / len(ul.rtis)) if ul.rtis else 0.0
+
+
+def select_shortage_aware_uls(candidates, washed_deficits, capacity):
+    """Select <= capacity whole ULs, using due washed-only deficits first.
+
+    washed_deficits maps CrateType to outstanding UL demand after subtracting
+    already washed/in-process supply. Prefer a mix of types when several are
+    short. Within a type, RFID product history and detention break ties.
+    No inventory list is mutated here; screen_uls removes selected ULs later.
+    """
+    from collections import defaultdict
+    by_type = defaultdict(list)
+    for ul in candidates:
+        by_type[ul.crate_type].append(ul)
+    for ul_list in by_type.values():
+        ul_list.sort(key=lambda ul: (_ul_dirty_history_count(ul),
+                                    _ul_average_detention(ul)), reverse=True)
+
+    selected = []
+    selected_by_type = defaultdict(int)
+    left = {ct: max(0, int(n)) for ct, n in washed_deficits.items()}
+    while len(selected) < capacity and any(by_type.values()):
+        needy = [ct for ct, items in by_type.items()
+                 if items and left.get(ct, 0) > 0]
+        if needy:
+            # Diminishing priority shares scarce capacity among short types;
+            # this prevents blindly taking the first 20 loads of one type.
+            ct = max(needy, key=lambda c: (left[c] / (1 + selected_by_type[c]),
+                                           left[c], c.name))
+            left[ct] -= 1
+        else:
+            ct = max((ct for ct, items in by_type.items() if items),
+                     key=lambda c: (_ul_dirty_history_count(by_type[c][0]),
+                                    _ul_average_detention(by_type[c][0]), c.name))
+        selected.append(by_type[ct].pop(0))
+        selected_by_type[ct] += 1
+    return selected
+
 
 class Pooler_Agent(mesa.Agent):
     def __init__(self, model, pool_id: str):
@@ -50,30 +112,48 @@ class Pooler_Agent(mesa.Agent):
     def receive_orders(self, order: OrderLine):
         self.order_book.append(order)
 
-    def extract_uls(self, crate_type: CrateType, needs_washed: Optional[bool], quantity_uls: int) -> List[UnitLoad]:
-        primary_stock = self.washed_stock_pool[crate_type] if needs_washed else self.unwashed_stock_pool[crate_type]
-        secondary_stock = [] if needs_washed else self.washed_stock_pool[crate_type]
-
-        primary_available = len(primary_stock)
-        selected_uls = []
-
-        # IMPROVEMENT: Removed 2 occurrences of random.sample() from the baseline code.
-        # Since UnitLoads of the same crate type and wash status are identical (fungible),
-        # random extraction is unnecessary. Replaced with O(1) list slicing for a massive speed boost.
-        if primary_available >= quantity_uls:
-            selected_uls = primary_stock[:quantity_uls]
-            del primary_stock[:quantity_uls]
+    def _take_uls(self, stock: List[UnitLoad], quantity_uls: int, candidates=None) -> List[UnitLoad]:
+        candidates = stock if candidates is None else candidates
+        quantity = min(quantity_uls, len(candidates))
+        if quantity <= 0:
+            return []
+        if self.model.config.TRACEABILITY_ENABLED:
+            selected = sorted(candidates, key=_ul_average_detention, reverse=True)[:quantity]
         else:
-            selected_uls.extend(primary_stock)
-            primary_stock.clear()
-            needed = quantity_uls - primary_available
-            if len(secondary_stock) >= needed:
-                selected_uls.extend(secondary_stock[:needed])
-                del secondary_stock[:needed]
-            else:
-                selected_uls.extend(secondary_stock)
-                secondary_stock.clear()
-        return selected_uls
+            # The assignment baseline specifies random stock retrieval.
+            selected = random.sample(candidates, quantity)
+        for ul in selected:
+            stock.remove(ul)
+        return selected
+
+    def extract_uls(self, crate_type: CrateType, needs_washed: Optional[bool], quantity_uls: int) -> List[UnitLoad]:
+        washed_stock = self.washed_stock_pool[crate_type]
+        unwashed_stock = self.unwashed_stock_pool[crate_type]
+
+        if needs_washed is True:
+            # A strict washed-only order must always receive washed ULs.
+            return self._take_uls(washed_stock, quantity_uls)
+
+        if not self.model.config.TRACEABILITY_ENABLED:
+            # Preserve the assignment baseline: unwashed first, then washed.
+            selected = self._take_uls(unwashed_stock, quantity_uls)
+        else:
+            # Soft RFID prioritization: prefer clean-history unwashed ULs but
+            # do NOT impose a new wash-only constraint on an order whose
+            # specification explicitly allows unwashed crates.
+            # Using dirty-history ULs as a fallback matches baseline eligibility.
+            # This is a model feasibility decision, not a food-safety claim.
+            clean = [ul for ul in unwashed_stock if _ul_dirty_history_count(ul) == 0]
+            selected = self._take_uls(unwashed_stock, quantity_uls, clean)
+            remaining = quantity_uls - len(selected)
+            if remaining > 0:
+                dirty_history = [ul for ul in unwashed_stock if _ul_dirty_history_count(ul) > 0]
+                selected.extend(self._take_uls(unwashed_stock, remaining, dirty_history))
+
+        remaining = quantity_uls - len(selected)
+        if remaining > 0:
+            selected.extend(self._take_uls(washed_stock, remaining))
+        return selected
 
     def fulfill_orders(self):
         due_orders = [o for o in self.order_book if self.model.steps >= (o.creation_step + o.lead_time)]
@@ -86,7 +166,7 @@ class Pooler_Agent(mesa.Agent):
             if extracted_qty_uls > 0:
                 for ul in extracted_uls:
                     for rti in ul.rtis:
-                        rti.location = LocationType.TRANSPORT
+                        rti.move_to_transport()
 
                 target_pro = self.model.producers_by_id[order.issuer]
                 target_pro.receive_uls(extracted_uls)
@@ -110,28 +190,82 @@ class Pooler_Agent(mesa.Agent):
         self.screen_uls(uls, current_step)
 
     def screen_uls(self, uls: List[UnitLoad], current_step: int):
-        num_uls_to_screen = min(len(uls), self.model.config.POOL_SCREENING_CAPACITY)
-
-        # IMPROVEMENT: Removed 1 occurrence of random.sample() from the baseline code.
-        # Bypassed vs screened unit loads don't need randomized selection because
-        # they are freshly arrived and homogenous. Used list slicing instead for speed.
-        uls_to_screen = uls[:num_uls_to_screen] if num_uls_to_screen > 0 else []
-        uls_to_bypass = uls[num_uls_to_screen:]
-
-        # Measurement only: do not change how loads are selected.
         screen_log = self.model.daily_log['screening']
+        screen_log.setdefault('screened_backlog_uls', 0)
         screen_log['arrived_uls'] += len(uls)
-        screen_log['screened_uls'] += len(uls_to_screen)
-        screen_log['bypassed_uls'] += len(uls_to_bypass)
+        capacity = self.model.config.POOL_SCREENING_CAPACITY
+        used_today = screen_log['screened_uls'] + screen_log['screened_backlog_uls']
+        remaining_capacity = max(0, capacity - used_today)
+
+        if not self.model.config.TRACEABILITY_ENABLED:
+            # Faithful baseline: randomly select only today's inbound ULs.
+            count = min(len(uls), remaining_capacity)
+            uls_to_screen = random.sample(uls, count) if count > 0 else []
+            uls_to_bypass = [ul for ul in uls if ul not in uls_to_screen]
+            screen_log['screened_uls'] += len(uls_to_screen)
+            screen_log['bypassed_uls'] += len(uls_to_bypass)
+            for ul in uls_to_bypass:
+                self.unwashed_stock_pool[ul.crate_type].append(ul)
+        else:
+            # All new returns first enter the unwashed stock. The RFID history is
+            # then used to prioritize dirty backlog and today's dirty arrivals.
+            for ul in uls:
+                if ul not in self.unwashed_stock_pool[ul.crate_type]:
+                    self.unwashed_stock_pool[ul.crate_type].append(ul)
+
+            new_ids = {ul.id for ul in uls}
+            lookahead = current_step + self.processing_lead_time
+            washed_deficits = {}
+            for ct in CrateType:
+                # Only washed-only orders due by the next recovery completion
+                # require preferential recovery; flexible orders do not.
+                washed_due_uls = sum(
+                    order.quantity for order in self.order_book
+                    if order.crate_type == ct and order.needs_washed is True
+                    and order.creation_step + order.lead_time <= lookahead
+                )
+                already_ready = len(self.washed_stock_pool[ct])
+                processing = sum(1 for ul in self.processing_buffer if ul.crate_type == ct)
+                washed_deficits[ct] = max(0, washed_due_uls - already_ready - processing)
+
+            recovery_candidates = [
+                ul for stock in self.unwashed_stock_pool.values() for ul in stock
+            ]
+            # RFID policy v3: washed-order shortages decide crate-type priority;
+            # previous product and detention determine which UL within that type.
+            # This does not change the 20-UL/day screening limit.
+            uls_to_screen = select_shortage_aware_uls(
+                recovery_candidates, washed_deficits, remaining_capacity
+            )
+
+            screened_new = sum(1 for ul in uls_to_screen if ul.id in new_ids)
+            screened_backlog = len(uls_to_screen) - screened_new
+            screen_log['screened_uls'] += screened_new
+            screen_log['screened_backlog_uls'] += screened_backlog
+            # Bypass is defined for today's arrivals only; backlog screening is reported separately.
+            screen_log['bypassed_uls'] = screen_log['arrived_uls'] - screen_log['screened_uls']
+
+            for ul in uls_to_screen:
+                self.unwashed_stock_pool[ul.crate_type].remove(ul)
+
+        # Monitoring only; report screened/bypassed ULs separately per crate type.
+        type_log = self.model.daily_log.get('screening_types')
+        if type_log is not None:
+            new_ul_ids = {ul.id for ul in uls}
+            screened_ids = {ul.id for ul in uls_to_screen}
+            for ul in uls:
+                type_log[ul.crate_type]['arrived_uls'] += 1
+                if ul.id not in screened_ids:
+                    type_log[ul.crate_type]['bypassed_uls'] += 1
+            for ul in uls_to_screen:
+                metric = 'screened_new_uls' if ul.id in new_ul_ids else 'screened_backlog_uls'
+                type_log[ul.crate_type][metric] += 1
 
         for ul in uls_to_screen:
             self.processing_buffer.append(ul)
             self.processing_times[ul.id] = current_step
             for rti in ul.rtis:
                 rti.under_processing = True
-
-        for ul in uls_to_bypass:
-            self.unwashed_stock_pool[ul.crate_type].append(ul)
 
     def process_uls(self):
         current_time = self.model.steps
@@ -140,6 +274,9 @@ class Pooler_Agent(mesa.Agent):
 
         # ULs finishing recovery today (may differ from ULs screened today).
         self.model.daily_log['screening']['processed_uls'] += len(ready_uls)
+        if 'screening_types' in self.model.daily_log:
+            for ul in ready_uls:
+                self.model.daily_log['screening_types'][ul.crate_type]['processed_uls'] += 1
 
         for ul in ready_uls:
             for rti in ul.rtis:
@@ -155,6 +292,8 @@ class Pooler_Agent(mesa.Agent):
             rti.dirty = True
         rti.dirty = False
         rti.washed = True
+        # The tag's previous-product field is cleared only after recovery is complete.
+        rti.product = None
         return rti
 
     def evaluate_rti_condition(self, rti: RTI_Agent):
@@ -162,10 +301,12 @@ class Pooler_Agent(mesa.Agent):
             rti.broken = True
         if not rti.dirty and rti.product is not None and rti.product.makes_dirty:
             rti.dirty = True
-        rti.product = None
 
     def step(self):
         self.process_uls()
+        if self.model.config.TRACEABILITY_ENABLED:
+            # Continue recovering previously bypassed dirty ULs when capacity is available.
+            self.screen_uls([], self.model.steps)
         self.fulfill_orders()
 
 
@@ -220,6 +361,7 @@ class Producer_Agent(mesa.Agent):
                 self.on_order_from_pool[rti.crate_type] = max(0, self.on_order_from_pool[rti.crate_type] - 1)
                 rti.location = LocationType.PRO
                 rti.washed = False
+                rti.product = None
                 rti.arrival_step = current_step
                 self.forward_stock_pro[rti.crate_type].append(rti)
 
@@ -228,14 +370,16 @@ class Producer_Agent(mesa.Agent):
 
     def extract_rtis(self, quantity: int, crate_type: CrateType) -> List[RTI_Agent]:
         available = self.forward_stock_pro[crate_type]
-        qty_to_sample = min(quantity, len(available))
-        if qty_to_sample == 0: return []
-
-        # IMPROVEMENT: Removed 1 occurrence of random.sample() from the baseline code.
-        # Empty RTIs are identical, so picking randomly adds linear overhead O(N) for no reason.
-        # Replaced with O(1) list slicing.
-        rtis_to_send = available[:qty_to_sample]
-        del available[:qty_to_sample]
+        qty_to_select = min(quantity, len(available))
+        if qty_to_select == 0:
+            return []
+        if self.model.config.TRACEABILITY_ENABLED:
+            rtis_to_send = sorted(available, key=lambda rti: rti.detention_time, reverse=True)[:qty_to_select]
+        else:
+            # The assignment baseline specifies random stock retrieval.
+            rtis_to_send = random.sample(available, qty_to_select)
+        for rti in rtis_to_send:
+            available.remove(rti)
         return rtis_to_send
 
     def fulfill_orders(self):
@@ -249,7 +393,7 @@ class Producer_Agent(mesa.Agent):
                 for rti in extracted_rtis:
                     rti.is_filled = True
                     rti.product = order.product
-                    rti.location = LocationType.TRANSPORT
+                    rti.move_to_transport()
                 self.model.rdc_agent.receive_rtis(extracted_rtis)
                 self.model.daily_log['movements']['pro_to_rdc'][self.producer_id][order.crate_type] += extracted_qty
 
@@ -371,7 +515,7 @@ class RDC_Agent(mesa.Agent):
         allocation = self.allocate_rtis(rtis)
         for rpos, rti_list in allocation.items():
             for rti in rti_list:
-                rti.location = LocationType.TRANSPORT
+                rti.move_to_transport()
             rpos.receive_rtis(rti_list)
 
     def receive_uls(self, uls: List[UnitLoad]):
@@ -387,15 +531,18 @@ class RDC_Agent(mesa.Agent):
         num_trucks = len(all_available_uls) // self.model.config.TRUCK_CAPACITY
         if num_trucks == 0: return
 
-        # FIX: Restored random.shuffle before slicing to prevent biased extraction (e.g., always taking TYPE_1 first).
-        # Ensures uniform return flows for different crate types back to the pooler.
-        random.shuffle(all_available_uls)
+        if self.model.config.TRACEABILITY_ENABLED:
+            # Prioritize the ULs with the longest RFID detention time at the RDC.
+            all_available_uls.sort(key=_ul_average_detention, reverse=True)
+        else:
+            # Preserve the assignment baseline's random stock retrieval.
+            random.shuffle(all_available_uls)
         uls_to_ship = all_available_uls[:num_trucks * self.model.config.TRUCK_CAPACITY]
 
         for ul in uls_to_ship:
             self.reverse_stock_rdc[ul.crate_type].remove(ul)
             for rti in ul.rtis:
-                rti.location = LocationType.TRANSPORT
+                rti.move_to_transport()
             self.model.daily_log['movements']['rdc_to_pool'][ul.crate_type] += len(ul.rtis)
 
         self.model.pool_agent.receive_uls(uls_to_ship)
@@ -441,8 +588,10 @@ class RPOS_Agent(mesa.Agent):
         for ct in CrateType:
             available_rtis = self.reverse_stock_rpos[ct]
 
-            # FIX: Restored random.shuffle to maintain realistic detention time variations.
-            random.shuffle(available_rtis)
+            if self.model.config.TRACEABILITY_ENABLED:
+                available_rtis.sort(key=lambda rti: rti.detention_time, reverse=True)
+            else:
+                random.shuffle(available_rtis)
 
             num_full_uls = len(available_rtis) // cfg.UL_SIZE
 
@@ -451,7 +600,8 @@ class RPOS_Agent(mesa.Agent):
                 self.reverse_stock_rpos[ct] = available_rtis[cfg.UL_SIZE:]
                 available_rtis = self.reverse_stock_rpos[ct]
 
-                for rti in rtis_for_ul: rti.location = LocationType.TRANSPORT
+                for rti in rtis_for_ul:
+                    rti.move_to_transport()
                 uls_to_dispatch.append(UnitLoad(crate_type=ct, rtis=rtis_for_ul))
 
         if uls_to_dispatch:

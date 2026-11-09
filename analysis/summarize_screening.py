@@ -13,7 +13,7 @@ def main():
         raise SystemExit('No simulation workbook found. Run python main.py first.')
     latest = max(files, key=lambda p: p.stat().st_mtime)
     df = pd.read_excel(latest, sheet_name='Screening')
-    expected = {'Step', 'arrived_uls', 'screened_uls', 'bypassed_uls',
+    expected = {'Step', 'arrived_uls', 'screened_uls', 'screened_backlog_uls', 'bypassed_uls',
                 'processed_uls', 'capacity_uls', 'utilization_pct', 'bypass_rate_pct'}
     if not expected.issubset(df.columns):
         raise SystemExit(f'Missing columns: {sorted(expected - set(df.columns))}')
@@ -25,7 +25,7 @@ def main():
 
     checks = {
         'arrivals = screened + bypassed': bool((df.arrived_uls == df.screened_uls + df.bypassed_uls).all()),
-        'screened <= daily capacity': bool((df.screened_uls <= df.capacity_uls).all()),
+        'screened <= daily capacity': bool(((df.screened_uls + df.screened_backlog_uls) <= df.capacity_uls).all()),
         'counts are nonnegative': bool((df[['arrived_uls', 'screened_uls', 'bypassed_uls', 'processed_uls']] >= 0).all().all()),
     }
     print(f'Workbook: {latest}')
@@ -34,7 +34,9 @@ def main():
         print(f'  {name}: {"PASS" if passed else "FAIL"}')
 
     arrived = int(df.arrived_uls.sum())
-    screened = int(df.screened_uls.sum())
+    screened_new = int(df.screened_uls.sum())
+    screened_backlog = int(df.screened_backlog_uls.sum())
+    screened = screened_new + screened_backlog
     bypassed = int(df.bypassed_uls.sum())
     completed = int(df.processed_uls.sum())
     all_capacity = int(df.capacity_uls.sum())
@@ -42,12 +44,15 @@ def main():
     bypass = 100 * bypassed / arrived if arrived > 0 else float('nan')
 
     print(f'Total arriving ULs: {arrived:,}')
-    print(f'Admitted to screening: {screened:,} ULs')
-    print(f'Bypassed screening: {bypassed:,} ULs')
+    print(f'New arrivals screened: {screened_new:,} ULs')
+    print(f'Previously bypassed dirty ULs re-screened: {screened_backlog:,} ULs')
+    print(f'Total screening operations: {screened:,} ULs')
+    print(f'Bypassed on arrival: {bypassed:,} ULs')
     print(f'Completed recovery: {completed:,} ULs')
     print(f'Overall screening capacity utilization: {util:.1f}%')
     print(f'Overall bypass rate: {bypass:.1f}%')
-    print(f'Days at full screening capacity: {int((df.screened_uls == df.capacity_uls).sum())} / {len(df)}')
+    total_screened_per_day = df.screened_uls + df.screened_backlog_uls
+    print(f'Days at full screening capacity: {int((total_screened_per_day == df.capacity_uls).sum())} / {len(df)}')
 
     if not all(checks.values()):
         raise SystemExit('KPI consistency checks FAILED; investigate before interpreting results.')

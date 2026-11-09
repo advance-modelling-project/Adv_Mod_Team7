@@ -15,7 +15,7 @@ from model import CLSC_Model
 
 
 def empty_log():
-    return dict(arrived_uls=0, screened_uls=0, bypassed_uls=0, processed_uls=0)
+    return dict(arrived_uls=0, screened_uls=0, screened_backlog_uls=0, bypassed_uls=0, processed_uls=0)
 
 
 class ScreeningMetricsTests(unittest.TestCase):
@@ -72,6 +72,7 @@ class ScreeningMetricsTests(unittest.TestCase):
             'Backorders|POOL_WASHED|TYPE_1': [0, 0],
             'Screening|arrived_uls': [0, 5],
             'Screening|screened_uls': [0, 2],
+            'Screening|screened_backlog_uls': [0, 0],
             'Screening|bypassed_uls': [0, 3],
             'Screening|processed_uls': [0, 1],
             'Screening|capacity_uls': [2, 2],

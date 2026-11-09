@@ -83,9 +83,10 @@ class CLSC_Model(mesa.Model):
             'Screening|screened_uls': lambda m: m.daily_log['screening']['screened_uls'],
             'Screening|bypassed_uls': lambda m: m.daily_log['screening']['bypassed_uls'],
             'Screening|processed_uls': lambda m: m.daily_log['screening']['processed_uls'],
+            'Screening|screened_backlog_uls': lambda m: m.daily_log['screening']['screened_backlog_uls'],
             'Screening|capacity_uls': lambda m: m.config.POOL_SCREENING_CAPACITY,
             'Screening|utilization_pct': lambda m: (
-                100.0 * m.daily_log['screening']['screened_uls'] / m.config.POOL_SCREENING_CAPACITY
+                100.0 * (m.daily_log['screening']['screened_uls'] + m.daily_log['screening']['screened_backlog_uls']) / m.config.POOL_SCREENING_CAPACITY
                 if m.config.POOL_SCREENING_CAPACITY > 0 else None
             ),
             'Screening|bypass_rate_pct': lambda m: (
@@ -93,6 +94,23 @@ class CLSC_Model(mesa.Model):
                 if m.daily_log['screening']['arrived_uls'] > 0 else None
             ),
         })
+
+        # RFID detention-time metrics: total node-days and RTIs departing each node.
+        for node in ('pool', 'pro', 'r_dc', 'r_pos'):
+            reporters[f'Detention|{node}|total_days'] = lambda m, n=node: m.daily_log['detention'][n]['total_days']
+            reporters[f'Detention|{node}|departures'] = lambda m, n=node: m.daily_log['detention'][n]['departures']
+            reporters[f'Detention|{node}|average_days'] = lambda m, n=node: (
+                m.daily_log['detention'][n]['total_days'] / m.daily_log['detention'][n]['departures']
+                if m.daily_log['detention'][n]['departures'] else None
+            )
+
+        # Screening operations by crate type, to verify allocation and starvation.
+        for ct in CrateType:
+            for metric in ('arrived_uls', 'screened_new_uls', 'screened_backlog_uls',
+                           'bypassed_uls', 'processed_uls'):
+                reporters[f'ScreeningByType|{ct.name}|{metric}'] = (
+                    lambda m, c=ct, k=metric: m.daily_log['screening_types'][c][k]
+                )
 
         # Measurement-only order metrics (all quantities in RTIs).
         for field in self.fulfillment_snapshot:
@@ -103,11 +121,23 @@ class CLSC_Model(mesa.Model):
 
     def reset_daily_log(self):
         self.daily_log = {
+            'screening_types': {
+                ct: {key: 0 for key in ('arrived_uls', 'screened_new_uls',
+                                       'screened_backlog_uls', 'bypassed_uls',
+                                       'processed_uls')} for ct in CrateType
+            },
             'screening': {
                 'arrived_uls': 0,
                 'screened_uls': 0,
                 'bypassed_uls': 0,
                 'processed_uls': 0,
+                'screened_backlog_uls': 0,
+            },
+            'detention': {
+                'pool': {'total_days': 0, 'departures': 0},
+                'pro': {'total_days': 0, 'departures': 0},
+                'r_dc': {'total_days': 0, 'departures': 0},
+                'r_pos': {'total_days': 0, 'departures': 0},
             },
             'movements': {
                 'pro_to_rdc': {p.producer_id: {ct: 0 for ct in CrateType} for p in self.producers},
@@ -147,11 +177,31 @@ class CLSC_Model(mesa.Model):
                 screening_df.columns = ['Step'] + [c.split('|', 1)[1] for c in screening_cols]
                 screening_df.to_excel(writer, sheet_name='Screening', index=False)
 
+            # One row per simulation day, crate type and screening operation.
+            by_type_cols = [c for c in df_wide.columns if c.startswith('ScreeningByType|')]
+            if by_type_cols:
+                by_type_df = df_wide[['Step', *by_type_cols]].melt(
+                    id_vars=['Step'], var_name='Key', value_name='ULs'
+                )
+                by_type_df[['Category', 'Crate Type', 'Metric']] = (
+                    by_type_df['Key'].str.split('|', expand=True)
+                )
+                by_type_df[['Step', 'Crate Type', 'Metric', 'ULs']].to_excel(
+                    writer, sheet_name='ScreeningByType', index=False
+                )
+
             fulfillment_cols = [c for c in df_wide.columns if c.startswith('Fulfillment|')]
             if fulfillment_cols:
                 fulfillment_df = df_wide[['Step', *fulfillment_cols]].copy()
                 fulfillment_df.columns = ['Step'] + [c.split('|', 1)[1] for c in fulfillment_cols]
                 fulfillment_df.to_excel(writer, sheet_name='Fulfillment', index=False)
+
+            detention_cols = [c for c in df_wide.columns if c.startswith('Detention|')]
+            if detention_cols:
+                detention_df = df_wide[['Step', *detention_cols]].copy()
+                detention_df.columns = ['Step'] + [c.split('|', 1)[1].replace('|', '_') for c in detention_cols]
+                detention_df.to_excel(writer, sheet_name='Detention', index=False)
+
             tracker = getattr(self, 'order_tracker', None)
             if tracker is not None:
                 pd.DataFrame(tracker.audit_rows(self.steps)).to_excel(writer, sheet_name='OrderAudit', index=False)

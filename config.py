@@ -21,6 +21,8 @@ class SimulationConfig:
     RTI_BREAKAGE_RATE: float = 0.05
     POOL_SCREENING_CAPACITY: int = 20
     POOL_PROCESSING_TIME: int = 1
+    # False reproduces the assignment's random baseline policies; True enables RFID rules.
+    TRACEABILITY_ENABLED: bool = False
     
     INIT_POOL_WASHED_UL: int = 100
     INIT_POOL_UNWASHED_UL: int = 100
