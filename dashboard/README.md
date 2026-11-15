@@ -8,7 +8,7 @@ A static, mobile-friendly back office for the AMFO closed-loop supply-chain mode
 - **Simulation replay:** animated forward/reverse network, day scrubber, play/pause/speed controls, daily flow bars, screening and overdue quantities. Animation represents **daily aggregates**, not exact RTI trajectories or transport time.
 - **Scenario lab:** side-by-side baseline vs RFID KPIs, detention and circulation indicators and interactive time-series overlays. Missing metrics display `—`, never fabricated zeros.
 - **Report library:** all `analysis/reports/**/*.md`, sanitized and rendered as Markdown with source/copy controls. New report files appear on the next successful deployment.
-- **Automatic builds:** a GitHub Actions workflow validates the code, runs the scenarios supported by the **merged** `main.py`, builds the snapshot JSON, and deploys GitHub Pages after every push to `main` or manual `workflow_dispatch`.
+- **Automatic builds:** a GitHub Actions workflow validates the code, runs the scenarios supported by the **merged** `../Modularized Code/main.py`, builds the snapshot JSON, and deploys GitHub Pages after every push to `main` or manual `workflow_dispatch`.
 
 ## Publish it
 
@@ -17,7 +17,7 @@ A static, mobile-friendly back office for the AMFO closed-loop supply-chain mode
 3. Repository **Actions → Publish Team 7 Control Room → Run workflow** to deploy immediately. Later pushes/merges to `main` trigger a new build automatically.
 4. Pages URL: `https://ylhhh4.github.io/Adv_Mod_Team7/` after successful deployment.
 
-For now, the merged `main.py` has no `--scenario` switch, so the workflow runs one baseline. When the team's Task 1 traceability code **is merged**, the same workflow automatically runs both `baseline` and `traceability` using seed 42. Avoid merging unfinished RFID policies just to populate the website.
+For now, the merged `../Modularized Code/main.py` has no `--scenario` switch, so the workflow runs one baseline. When the team's Task 1 traceability code **is merged**, the same workflow automatically runs both `baseline` and `traceability` using seed 42. Avoid merging unfinished RFID policies just to populate the website.
 
 ### Local preview with existing workbooks
 

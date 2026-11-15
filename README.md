@@ -6,19 +6,19 @@ This project is an agent-based simulation model built with [Mesa](https://mesa.r
 
 The project has been refactored into a modular structure for better maintainability, scalability, and ease of parameter tuning.
 
-* **`config.py`**
+* **`Modularized Code/config.py`**
   Contains all the global parameters, enums (`CrateType`, `LocationType`), and core data structures (`SimulationConfig`, `Product`, `OrderLine`, `UnitLoad`). This is the central file to modify when performing parameter sweeps or scenario testing, keeping the configuration completely isolated from the simulation logic.
 
-* **`agents.py`**
+* **`Modularized Code/agents.py`**
   Defines the behavior and logic of all the network nodes (agents) in the supply chain. It includes `RTI_Agent` (the containers), `Pooler_Agent` (washing and pooling facility), `Producer_Agent` (manufacturers), `RDC_Agent` (distribution centers), and `RPOS_Agent` (retail point of sales). 
 
-* **`model.py`**
+* **`Modularized Code/model.py`**
   Houses the `CLSC_Model` class which orchestrates the simulation environment. It handles reading the configuration, initializing all agents, defining the `DataCollector` metrics (Stock, Flow, Backorders), and managing the daily step logic and Excel output exportation.
 
-* **`main.py`**
+* **`Modularized Code/main.py`**
   The entry point of the application. It initializes the `SimulationConfig`, runs the time-step loop, displays a progress bar in the console, and triggers the final data export upon completion.
 
-* **`Assignment_code_baseline.py`**
+* **`Baseline Code/Assignment_code_baseline.py`**
   This file is the original monolithic Python script provided by the professor. While it served as our starting baseline before we divided the code into the four modules above, it is kept in the repository solely for reference and historical comparison. We will not directly execute or use this file in our current modular workflow.
 
 ### Prerequisites
@@ -53,7 +53,7 @@ pip install -r requirements.txt
 
 ## How to Run
 
-Execute the simulation by running the `main.py` script:
+Execute the simulation by running the `Modularized Code/main.py` script:
 
 ```bash
 python main.py
