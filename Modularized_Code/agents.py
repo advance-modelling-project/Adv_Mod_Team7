@@ -5,7 +5,7 @@ import mesa
 from typing import List, Dict, Optional
 
 # Import everything from the merged config
-from config import *
+from Modularized_Code.config import *
 
 
 class RTI_Agent(mesa.Agent):
