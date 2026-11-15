@@ -1,7 +1,7 @@
 """Unit tests for the order tracker; no full-scale Mesa model is needed."""
 import unittest
 from types import SimpleNamespace
-from config import CrateType
+from Modularized_Code.config import CrateType
 from fulfillment_metrics import OrderTracker
 
 

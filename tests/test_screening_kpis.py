@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
-from agents import Pooler_Agent
-from config import CrateType, SimulationConfig, UnitLoad
-from model import CLSC_Model
+from Modularized_Code.agents import Pooler_Agent
+from Modularized_Code.config import CrateType, SimulationConfig, UnitLoad
+from Modularized_Code.model import CLSC_Model
 
 
 def empty_log():
