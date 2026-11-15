@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
+import Modularized_Code.config as cfg_module
 from Modularized_Code.agents import Pooler_Agent
-from Modularized_Code.config import CrateType, SimulationConfig, UnitLoad
+from Modularized_Code.config import CrateType, UnitLoad
 from Modularized_Code.model import CLSC_Model
 
 
@@ -20,9 +22,13 @@ def empty_log():
 
 class ScreeningMetricsTests(unittest.TestCase):
     def setUp(self):
-        self.cfg = SimulationConfig(POOL_SCREENING_CAPACITY=2)
+        # 临时将全局 POOL_SCREENING_CAPACITY 设为 2，并在每个测试结束后自动还原
+        patcher = patch.object(cfg_module, 'POOL_SCREENING_CAPACITY', 2)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.model = SimpleNamespace(
-            config=self.cfg,
+            config=cfg_module,
             daily_log={'screening': empty_log()},
         )
         self.pool = SimpleNamespace(
@@ -59,8 +65,8 @@ class ScreeningMetricsTests(unittest.TestCase):
         self.assertEqual(len(self.pool.processing_buffer), 0)
 
     def test_zero_capacity_counts_bypass(self):
-        self.model.config.POOL_SCREENING_CAPACITY = 0
-        Pooler_Agent.screen_uls(self.pool, self.loads(3), 10)
+        with patch.object(cfg_module, 'POOL_SCREENING_CAPACITY', 0):
+            Pooler_Agent.screen_uls(self.pool, self.loads(3), 10)
         self.assertEqual(self.model.daily_log['screening']['screened_uls'], 0)
         self.assertEqual(self.model.daily_log['screening']['bypassed_uls'], 3)
 
