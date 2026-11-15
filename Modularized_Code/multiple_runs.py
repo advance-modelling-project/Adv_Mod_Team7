@@ -4,8 +4,8 @@ import csv
 from datetime import datetime
 
 # 直接从 config 导入，与 main.py 保持一致
-from config import SIMULATION_STEPS
-from model import CLSC_Model
+from Modularized_Code.config import SIMULATION_STEPS
+from Modularized_Code.model import CLSC_Model
 
 # =============================================================================
 # RUN PARAMETERS

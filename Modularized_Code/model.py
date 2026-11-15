@@ -4,8 +4,8 @@ import mesa
 from datetime import datetime
 
 # Import configurations and agents
-from config import *
-from agents import Pooler_Agent, Producer_Agent, RDC_Agent, RPOS_Agent, RTI_Agent
+from Modularized_Code.config import *
+from Modularized_Code.agents import Pooler_Agent, Producer_Agent, RDC_Agent, RPOS_Agent, RTI_Agent
 
 
 class CLSC_Model(mesa.Model):

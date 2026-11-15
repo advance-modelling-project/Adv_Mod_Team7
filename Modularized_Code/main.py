@@ -2,8 +2,8 @@ import os
 from datetime import datetime
 
 # Import constants and the model
-from config import SIMULATION_STEPS
-from model import CLSC_Model
+from Modularized_Code.config import SIMULATION_STEPS
+from Modularized_Code.model import CLSC_Model
 
 if __name__ == "__main__":
     print("\nSimulation starting...\n")
